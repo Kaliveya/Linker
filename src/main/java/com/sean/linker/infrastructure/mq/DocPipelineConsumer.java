@@ -3,7 +3,6 @@ package com.sean.linker.infrastructure.mq;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.rabbitmq.client.Channel;
 import com.sean.linker.agent.advisor.ModuleVocabularyAdvisor;
-import com.sean.linker.agent.client.ParseAgentChatClient;
 import com.sean.linker.common.ConstantStatic;
 import com.sean.linker.domain.ExistingResearch;
 import com.sean.linker.domain.dto.SemanticNodeDTO;

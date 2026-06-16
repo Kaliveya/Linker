@@ -1,102 +1,198 @@
-# Linker — AI 驱动的语义连接器
+# Linker — 软件交付的 AI 语义连接器
 
-Linker 是面向软件交付团队的 AI 语义连接平台。核心洞察：AI 工具提升了个人生产力，但各角色产出的制品（会议纪要→需求→技术方案→测试用例→代码）彼此孤立——没有跨制品一致性校验、没有精准变更传播、没有客观进度追踪。
+> 把孤立的需求、方案、测试、代码连成一张能自动校验、自动传播的语义网络
 
-Linker 通过将每份制品的语义单元建模为图节点，让 AI 持续执行传统工具（Jira、Confluence）无法完成的三件事：**一致性校验**、**变更影响传播**、**真实进度推断**。
+---
+
+## 这是什么
+
+AI 工具让每个角色都能更快产出制品（PM 写需求、BA 写方案、DEV 写代码、QA 写测试），但产出之间是断的：
+
+- 需求改了一句话，没人知道下游哪些方案和测试要跟着改
+- 业务方案漏了几条需求，要靠人肉对照才发现
+- 项目进度全靠每周例会和自报，没人知道"真实"完成度
+
+Linker 把每份制品的语义单元（一条需求、一段方案、一个测试用例）建模成**图节点**，让 AI 在节点之间持续做三件事：
+
+| 能力 | 解决的问题 |
+|---|---|
+| **一致性校验** | 业务方案是否完整覆盖需求？技术方案有没有遗漏或凭空新增？ |
+| **变更影响传播** | 改一处需求，自动定位所有受影响的下游节点 + 精准通知对应负责人 |
+| **真实进度推断** | 从代码提交、测试通过率、文档状态反推进度，而非自报 |
+
+这是 Jira / Confluence 类工具因为不理解语义而做不到的。
 
 ---
 
 ## 核心数据模型
 
-所有功能基于**语义关联图**运作：
+所有功能都是图操作：
 
 ```
-会议纪要 ──→ 需求节点（蓝图）
-                  │
-                  ├──→ 技术方案段落 ──→ 代码 / PR
-                  │
-                  └──→ 测试用例
+需求调研文档
+    │ ParseAgent 解析
+    ▼
+REQUIREMENT 节点  ──派生──▶  BLUEPRINT_SEG  (业务方案段落)
+   │                          │
+   │                          └─实现─▶  TECH_SEG  (技术方案段落)
+   └────────实现────────────────────┴─▶  TEST_CASE
+                                       │
+                                       └─▶  代码 / PR
 ```
 
-- **Node**：制品的语义单元（一条需求、一段技术设计、一个测试用例），含向量 Embedding + 结构化元数据（module、reqType、bizCode、owner、status）
-- **Edge**：节点间的派生/实现关系，人工确认后固化入图，驱动变更传播
+- **节点** 带向量 Embedding + 结构化元数据（`bizCode`、`reqType`、`module`、`owner`、`status`）
+- **边** 由 AI 提议 + 人工确认入库，只有 `confirmed=true` 的边参与变更传播
+
+---
+
+## 三个最难的技术点
+
+### 1. 关联准确性（场景二的命门）
+
+纯向量相似度会把"登录 OTP"和"支付 OTP"误关联——语义极度相似但绝不能串台。三重防御：
+
+```
+锚点过滤 (SQL: WHERE module=?)
+      ↓
+LLM 双向校验 (RelationVerifyAgent 判断意图是否真匹配)
+      ↓
+人工确认 (前端"建议关联"虚线 → 实线)
+```
+
+只有走完三步的边才同步到 Neo4j，参与后续传播。
+
+### 2. reqType 路由传播（场景三的核心）
+
+变更传播不是无脑全员广播。按 `reqType` 走不同路径：
+
+- **BUSINESS** 需求变更 → 两阶段门控：先通知 BA 确认业务方案 → 再通知 DEV / QA
+- **PERFORMANCE / SECURITY** 需求变更 → 跳过业务方案层，直达技术 / 测试
+
+实现方式：Neo4j 图遍历时按 `reqType` 拼不同的 Cypher 约束。
+
+### 3. bizCode 对齐（场景三/五的基石）
+
+文档升版时，识别"哪条改了、哪条是新增、哪条被删了"，靠的是稳定的 `bizCode`（R3、P1、TC_OTP_001）。ParseAgent 解析时强制输出，升版时通过 prompt 注入已有 bizCode 列表防止冲突。
 
 ---
 
 ## 系统架构
 
 ```
-┌──────────────────────────────────────────┐
-│  接口层    Controller / WebSocket         │
-├──────────────────────────────────────────┤
-│  应用服务层  编排流水线、变更传播、完整性检查  │
-├──────────────────────────────────────────┤
-│  Agent 层   ParseAgent / RelationVerify  │
-│             ImpactAgent / Consistency    │
-├──────────────────────────────────────────┤
-│  领域服务层  节点管理 / 关联图 / 变更检测    │
-├──────────────────────────────────────────┤
-│  基础设施层  PostgreSQL+pgvector / Neo4j  │
-│             MiniMax LLM / RabbitMQ       │
-└──────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│  接口层      Controller / WebSocket（待接入）            │
+├────────────────────────────────────────────────────────┤
+│  应用服务层  上传流水线编排 / 变更传播编排 / 完整性检查    │
+├────────────────────────────────────────────────────────┤
+│  Agent 层    ParseAgent / RelationVerifyAgent /         │
+│              ImpactAgent / ConsistencyAgent             │
+├────────────────────────────────────────────────────────┤
+│  领域服务层  节点管理 / 关联图 / 检索召回 / 变更检测      │
+├────────────────────────────────────────────────────────┤
+│  基础设施层  PostgreSQL+pgvector │ Neo4j │ MiniMax │ MQ │
+└────────────────────────────────────────────────────────┘
 ```
 
-### 双库职责分离
+**双库职责分离**：
 
-| 数据库 | 职责 |
-|---|---|
-| PostgreSQL + pgvector | 唯一事实源：节点全文、向量、版本、变更、通知 |
-| Neo4j | 图投影：轻量节点 + 关系边，专职变更传播图遍历 |
+| 数据库 | 角色 | 用途 |
+|---|---|---|
+| PostgreSQL + pgvector | 唯一事实源 | 全文、向量、版本、变更、通知；建图阶段的向量检索 |
+| Neo4j | 图投影 | 轻量节点 + 已确认边；变更传播图遍历 |
+
+两库通过 `semantic_node.id ↔ Node.nodeId` 关联。Demo 阶段同事务内先写 PG 再写 Neo4j；生产环境改为 Outbox 最终一致。
 
 ---
 
 ## 技术栈
 
-| 层次 | 技术选型 |
+| 层次 | 选型 |
 |---|---|
-| 应用框架 | Spring Boot 3.5.x |
-| AI 编排 | Spring AI 1.1.4 |
-| 大模型 | MiniMax（OpenAI 兼容接入） |
+| 应用框架 | Spring Boot 3.5 |
+| AI 编排 | Spring AI 1.1.4（ChatClient / Advisor / BeanOutputConverter） |
+| 大模型 | MiniMax-M2.7（OpenAI 兼容） |
 | Embedding | MiniMax embo-01（1536 维） |
-| 主数据 / 向量 | PostgreSQL + pgvector |
-| 图数据库 | Neo4j |
-| 持久化 | MyBatis Plus 3.5.x |
-| 消息队列 | RabbitMQ |
-| 实时推送 | WebSocket（STOMP） |
+| 主数据 + 向量 | PostgreSQL 15 + pgvector（HNSW 索引） |
+| 图数据库 | Neo4j 5（Spring Data Neo4j） |
+| 持久化 | MyBatis Plus 3.5 |
+| 消息队列 | RabbitMQ（异步解析流水线） |
+| 缓存 | Redis |
 
 ---
 
-## 当前实现进度（MVP）
+## MVP 范围与进度
 
-### 场景一：需求文档解析（进行中）
+聚焦四个场景串成的一条完整闭环：
 
-- [x] 文档上传接口 `POST /api/projects/{pid}/docs`
-- [x] ParseAgent：文档解析为语义节点，识别 reqType / bizCode / module
-- [x] ModuleVocabularyAdvisor：module 闭域校验，防跨模块串台
-- [x] StructuredOutputValidationAdvisor：JSON 格式校验 + 自动重试
-- [x] 节点入库（semantic_node）+ Embedding 向量化（pgvector）
-- [x] MQ 异步流水线（RabbitMQ）
-- [ ] 完整性检查（缺口算法）
-- [ ] 人工确认 reqType / module 接口
-- [ ] 缺口清单接口 + 一键指派
+```
+场景一 (解析 + reqType识别 + 完整性检查)
+   │  产出：带 reqType 的需求节点
+   ▼
+场景二 (建立关联 + 一致性校验)
+   │  产出：已确认的关联边（语义图成形）
+   ▼
+场景三 (版本比对 → 变更检测 → reqType路由传播 → 通知)
+   │  共享版本比对能力
+   ▼
+场景五 (版本比对 → 新增识别 → 提醒补方案 → 回到完整性检查)
+```
 
-### 场景二：关联建立与一致性校验（待实现）
+### 场景一 · 需求调研阶段（**已完成**）
 
-- [ ] 业务方案 / 技术方案上传解析
-- [ ] 锚点过滤 + RelationVerifyAgent 双向校验
-- [ ] 人工确认关联 → 同步 Neo4j
-- [ ] ConsistencyAgent 一致性校验
+文档上传 → AI 解析 → 人工确认 → 缺口指派完整闭环：
 
-### 场景三：变更传播（待实现）
+- [x] 文档上传 + RabbitMQ 异步流水线（`POST /api/projects/{pid}/docs`）
+- [x] **ParseAgent**：拆节点 / 识别 reqType / 提取 bizCode（Spring AI ChatClient）
+- [x] **ModuleVocabularyAdvisor**：注入模块闭域，强制 LLM 只输出枚举值（防跨模块串台第一重锚点）
+- [x] **StructuredOutputValidationAdvisor**：JSON 结构校验 + 失败自动重试
+- [x] 节点入库 + Embedding 向量化（pgvector）
+- [x] 待确认面板 / reqType + module 人工确认（`PATCH /api/nodes/{id}/req-type`、`/module`）
+- [x] 两项都确认后同步节点投影到 Neo4j（Spring Data Neo4j + Cypher MERGE）
+- [x] 实时缺口计算（`GET /api/projects/{pid}/gaps`，按 reqType 给不同期望下游）
+- [x] PM 一键指派 → 生成 ASSIGNMENT 通知（`POST /api/projects/{pid}/assignments`）
+- [x] 项目 / 成员 / 模块 / 通知 CRUD 接口
 
-- [ ] 文档升版 + 版本比对（bizCode 对齐）
-- [ ] 快捷变更入口
-- [ ] reqType 路由传播（Neo4j 图遍历）
-- [ ] BUSINESS 两阶段门控通知
+### 场景二 · 方案编写阶段（待实现）
 
-### 场景五：新增需求识别（待实现）
+- [ ] 业务方案 / 技术方案 / 测试用例文档上传解析（复用 ParseAgent 结构）
+- [ ] **关联建立**：锚点过滤 + RelationVerifyAgent 双向校验
+- [ ] 关联人工确认 → 同步边到 Neo4j
+- [ ] **ConsistencyAgent**：上下游一致性校验
 
-- [ ] 升版新增节点双重触发（变更通知 + 缺口清单）
+### 场景三 · 业务需求变更（待实现）
+
+- [ ] 文档升版接口（场景三入口一）
+- [ ] 快捷变更接口（场景三入口二）
+- [ ] 版本比对：按 bizCode 对齐识别 MODIFY / ADD / DELETE
+- [ ] **ImpactAgent**：reqType 路由 + Neo4j 图遍历
+- [ ] BUSINESS 两阶段门控通知（PHASE_BA → PHASE_DOWNSTREAM）
+
+### 场景五 · 中途新增需求（待实现）
+
+- [ ] 升版新增节点双重触发：变更事件 + 进缺口清单
+
+---
+
+## 端到端演示路径
+
+数据库准备好后，按顺序调用即可演示场景一完整闭环：
+
+```
+1. POST   /api/projects                       # 新建项目
+2. POST   /api/projects/{pid}/members × N     # 添加 BA / DEV / QA
+3. POST   /api/projects/{pid}/modules × N     # 配置 LOGIN / PAYMENT / ...
+4. POST   /api/projects/{pid}/docs            # 上传需求 .md（异步流水线启动）
+
+   ⏱  等待 5-30 秒，ParseAgent 解析 + 向量化
+
+5. GET    /api/projects/{pid}/nodes/pending   # 查看 LLM 解析结果
+6. PATCH  /api/nodes/{id}/req-type × N        # 逐条确认 reqType
+7. PATCH  /api/nodes/{id}/module × N          # 处理 PENDING 节点
+                                              # ↑ 两项都确认后节点同步进 Neo4j
+8. GET    /api/projects/{pid}/gaps            # 看缺口 + 候选指派人
+9. POST   /api/projects/{pid}/assignments     # PM 勾选 assignee 一键指派
+10. GET   /api/notifications?userId=...       # 被指派人在通知中心看到 ASSIGNMENT
+```
 
 ---
 
@@ -104,53 +200,82 @@ Linker 通过将每份制品的语义单元建模为图节点，让 AI 持续执
 
 ### 前置依赖
 
-- Java 21+
-- PostgreSQL 15+（需启用 pgvector 扩展）
-- Neo4j 5+
-- RabbitMQ 3.12+
-- Redis 7+
+| 服务 | 版本 | 说明 |
+|---|---|---|
+| Java | 21+ | Spring Boot 3.5 要求 |
+| PostgreSQL | 15+ | 启用 `vector` 扩展 |
+| Neo4j | 5+ | bolt://localhost:7687 |
+| RabbitMQ | 3.12+ | guest/guest 默认账号即可 |
+| Redis | 7+ | |
 
-### 数据库初始化
+### 1. PostgreSQL 准备
 
 ```sql
--- PostgreSQL
+CREATE DATABASE "Linker";
+\c Linker
 CREATE EXTENSION IF NOT EXISTS vector;
-
--- 建表 DDL 见 /docs/schema.sql（待补充）
 ```
 
-### 配置
+建表 DDL 见技术方案文档第 4.2 节。
 
-复制 `application.yml` 并填写以下配置：
+### 2. 本地配置覆盖
+
+仓库提交的 `application.yml` 中所有密钥均已脱敏。本地启动时新建 `src/main/resources/application-local.yml` 写入真实配置：
 
 ```yaml
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/Linker
-    username: your_username
-    password: your_password
+    username: your_pg_user
+    password: your_pg_password
   neo4j:
-    uri: bolt://localhost:7687
     authentication:
-      username: neo4j
-      password: your_password
+      password: your_neo4j_password
   ai:
     minimax:
-      api-key: your_api_key
+      api-key: sk-your-minimax-key
+      embedding:
+        api-key: sk-your-minimax-key
 ```
 
-### 启动
+`application-local.yml` 已在 `.gitignore` 中（通过 `*-local.yml` 规则），不会被提交。
+
+### 3. 启动
 
 ```bash
-./mvnw spring-boot:run
+./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+或在 IntelliJ Run Configuration 的 `Active profiles` 填 `local`。
+
+---
+
+## 项目结构
+
+```
+src/main/java/com/sean/linker/
+├── agent/              # Spring AI Agent 定义（ParseAgent + Advisor）
+│   ├── advisor/        # ModuleVocabularyAdvisor 等
+│   └── client/         # ChatClient 配置
+├── controller/         # REST 接口
+├── service/ + impl/    # 业务服务（场景一闭环）
+├── mapper/             # MyBatis Plus Mapper（PG）
+├── repository/         # Spring Data Neo4j Repository
+├── domain/
+│   ├── dto/            # 请求 DTO
+│   ├── vo/             # 返回 VO
+│   ├── entity/         # PG Entity
+│   └── graph/          # Neo4j 节点投影
+└── infrastructure/
+    ├── mq/             # RabbitMQ 消费者（解析流水线）
+    └── typehandler/    # PgVectorTypeHandler 等
 ```
 
 ---
 
-## 项目文档
+## 设计文档
 
 | 文档 | 说明 |
 |---|---|
-| `Linker-需求文档.md` | 问题、定位、核心价值 |
-| `Linker-业务方案.md` | 系统架构、11 个功能模块、演示流程 |
-| `Linker-3_技术方案.md` | MVP 技术实现方案 |
+| `../../Linker-需求文档.md` | 问题定义、定位、核心价值 |
+| `../../Linker-业务方案.md` | 系统架构、11 个功能模块、演示流程 |
+| `../../Linker-3_技术方案.md` | MVP 技术实现：表结构、Agent 设计、接口列表 |

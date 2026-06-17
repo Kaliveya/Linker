@@ -22,6 +22,8 @@ spring:
     username: guest
     password: guest
     virtual-host: /
+    requested-heartbeat: 600
+    connection-timeout: 60000
     listener:
       simple:
         concurrency: 1

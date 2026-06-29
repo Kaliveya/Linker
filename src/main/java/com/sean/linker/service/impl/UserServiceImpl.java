@@ -65,6 +65,17 @@ public class UserServiceImpl implements UserService {
                 .build();
     }
 
+    @Override
+    public java.util.List<UserVO> listAll() {
+        return linkerUserMapper.selectList(null).stream()
+                .map(u -> UserVO.builder()
+                        .userId(u.getId())
+                        .name(u.getName())
+                        .email(u.getEmail())
+                        .build())
+                .toList();
+    }
+
     /** Demo 阶段简化：SHA-256 单向 hash，不加盐 */
     private String sha256(String raw) {
         try {

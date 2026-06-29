@@ -34,3 +34,9 @@ build/
 /.claude/
 
 *-local.yml
+
+# 临时测试截图 / 烟测产物
+.tmp-screens/
+
+# macOS
+.DS_Store

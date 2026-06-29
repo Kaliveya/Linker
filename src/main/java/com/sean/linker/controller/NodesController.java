@@ -3,7 +3,9 @@ package com.sean.linker.controller;
 import com.sean.linker.common.CommonResponse;
 import com.sean.linker.domain.dto.ConfirmModuleDTO;
 import com.sean.linker.domain.dto.ConfirmReqTypeDTO;
+import com.sean.linker.service.GraphService;
 import com.sean.linker.service.NodeConfirmService;
+import com.sean.linker.service.RelationCandidateService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,6 +15,8 @@ import org.springframework.web.bind.annotation.*;
 public class NodesController {
 
     private final NodeConfirmService nodeConfirmService;
+    private final GraphService graphService;
+    private final RelationCandidateService relationCandidateService;
 
     /**
      * 确认或修正节点的 reqType — 解析后人工把关
@@ -35,6 +39,26 @@ public class NodesController {
     public CommonResponse confirmModule(@PathVariable Long nodeId,
                                         @RequestBody ConfirmModuleDTO dto) {
         nodeConfirmService.confirmModule(nodeId, dto.getModuleCode());
+        return CommonResponse.success(null);
+    }
+
+    /**
+     * 节点详情 — 图谱页点击节点时调用
+     * 返回节点元数据 + 已确认的上下游邻居列表
+     */
+    @GetMapping("/{nodeId}")
+    public CommonResponse getNodeDetail(@PathVariable Long nodeId) {
+        return CommonResponse.success(graphService.getNodeDetail(nodeId));
+    }
+
+    /**
+     * 重新生成候选关联 — 应急/补救入口
+     * 适用于：模块修正后想重跑、LLM 当时拒了想再试一次、Demo 演示卡住时的快速恢复。
+     * 仅对下游节点（BLUEPRINT_SEG / TECH_SEG / TEST_CASE）有效；上游节点不参与候选生成。
+     */
+    @PostMapping("/{nodeId}/suggest-relations")
+    public CommonResponse resuggestRelations(@PathVariable Long nodeId) {
+        relationCandidateService.suggestRelations(nodeId);
         return CommonResponse.success(null);
     }
 }

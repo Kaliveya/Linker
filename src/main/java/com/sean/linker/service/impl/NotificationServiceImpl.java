@@ -1,6 +1,7 @@
 package com.sean.linker.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.sean.linker.domain.entity.NotificationEntity;
 import com.sean.linker.domain.vo.NotificationVO;
 import com.sean.linker.mapper.NotificationMapper;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -39,5 +41,17 @@ public class NotificationServiceImpl implements NotificationService {
                         .createdAt(n.getCreatedAt())
                         .build())
                 .toList();
+    }
+
+    private static final Set<String> VALID_STATUS = Set.of("UNREAD", "READ", "HANDLED", "IGNORED");
+
+    @Override
+    public void updateStatus(Long notificationId, String status) {
+        if (!VALID_STATUS.contains(status)) {
+            throw new IllegalArgumentException("非法通知状态: " + status);
+        }
+        notificationMapper.update(null, new LambdaUpdateWrapper<NotificationEntity>()
+                .eq(NotificationEntity::getId, notificationId)
+                .set(NotificationEntity::getStatus, status));
     }
 }

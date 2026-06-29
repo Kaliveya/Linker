@@ -18,6 +18,8 @@ public class ProjectsController {
     private final ModuleService moduleService;
     private final CompletenessService completenessService;
     private final NodeConfirmService nodeConfirmService;
+    private final GraphService graphService;
+    private final ConsistencyService consistencyService;
 
     // ───────────────────────────── 项目本身 ─────────────────────────────
 
@@ -28,6 +30,15 @@ public class ProjectsController {
     @PostMapping
     public CommonResponse createProject(@RequestBody CreateProjectDTO dto) {
         return CommonResponse.success(projectService.createProject(dto));
+    }
+
+    /**
+     * 当前用户参与的项目列表 — 顶栏「项目下拉」数据源
+     * 暂未接入认证，userId 通过 query param 传入
+     */
+    @GetMapping
+    public CommonResponse listMyProjects(@RequestParam Long userId) {
+        return CommonResponse.success(projectService.listMyProjects(userId));
     }
 
     // ───────────────────────────── 成员管理 ─────────────────────────────
@@ -110,5 +121,37 @@ public class ProjectsController {
     @GetMapping("/{pid}/nodes/pending")
     public CommonResponse listPending(@PathVariable Long pid) {
         return CommonResponse.success(nodeConfirmService.listPending(pid));
+    }
+
+    // ───────────────────────────── 场景二 · 图谱 ─────────────────────────────
+
+    /**
+     * 项目语义图谱 — 场景二可视化
+     * 返回所有已完全确认的节点 + 已确认的关联边，供前端 vis-network 渲染
+     */
+    @GetMapping("/{pid}/graph")
+    public CommonResponse getGraph(@PathVariable Long pid) {
+        return CommonResponse.success(graphService.getProjectGraph(pid));
+    }
+
+    // ───────────────────────────── 场景二 · 一致性校验 ─────────────────────────────
+
+    /**
+     * 跑项目级一致性检查 — 场景二·ConsistencyAgent
+     * 遍历项目下所有完全确认的下游节点（业务方案段/技术方案段/测试用例），
+     * 每个节点调 LLM 与其全部已确认上游对比，输出问题列表落表 + 生成 CONSISTENCY 通知
+     */
+    @PostMapping("/{pid}/consistency/run")
+    public CommonResponse runConsistency(@PathVariable Long pid) {
+        int count = consistencyService.runProject(pid);
+        return CommonResponse.success(count);
+    }
+
+    /**
+     * 列出项目下最新一致性报告（每个节点只取最新一份）
+     */
+    @GetMapping("/{pid}/consistency/reports")
+    public CommonResponse listConsistencyReports(@PathVariable Long pid) {
+        return CommonResponse.success(consistencyService.listLatest(pid));
     }
 }

@@ -79,6 +79,10 @@ public class DocsServiceImpl implements DocsService {
                         artifactDocEntity.getId());
                 break;
             case ConstantStatic.BLUEPRINT:
+                rabbitTemplate.convertAndSend(
+                        ConstantStatic.PIPELINE_EXCHANGE,
+                        ConstantStatic.ROUTING_DOC_UPLOAD,
+                        artifactDocEntity.getId());
                 break;
             case ConstantStatic.TECH:
                 break;

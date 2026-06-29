@@ -26,4 +26,20 @@ public class NotificationsController {
                                             @RequestParam(required = false) String status) {
         return CommonResponse.success(notificationService.listNotifications(userId, status));
     }
+
+    /**
+     * 更新通知状态（标已读 / 处理 / 忽略） — 通知中心操作入口
+     * 仅允许 UNREAD / READ / HANDLED / IGNORED 四种值
+     */
+    @PatchMapping("/{id}/status")
+    public CommonResponse updateStatus(@PathVariable Long id,
+                                       @RequestBody UpdateStatusBody body) {
+        notificationService.updateStatus(id, body.getStatus());
+        return CommonResponse.success(null);
+    }
+
+    @lombok.Data
+    public static class UpdateStatusBody {
+        private String status;
+    }
 }
